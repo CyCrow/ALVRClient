@@ -558,7 +558,7 @@ void VrContext::render(uint64_t renderedFrameIndex) {
     // TODO
     double DisplayTime = 0.0;
 
-    int SwapInterval = 1;
+    uint SwapInterval = 1;
 
     ovrSubmitFrameDescription2 frameDesc = {};
     frameDesc.Flags = 0;
@@ -626,11 +626,18 @@ void VrContext::renderLoading() {
 
 void VrContext::setFrameGeometry(int width, int height) {
     int eye_width = width / 2;
-    if (eye_width != FrameBufferWidth || height != FrameBufferHeight) {
+    int eye_height = height;
+
+    // warp adjust
+    float factor = 1.0f;
+    eye_width = (int)(eye_width * factor + 0.5f);
+    eye_height = (int)(eye_height * factor + 0.5f);
+
+    if (eye_width != FrameBufferWidth || eye_height != FrameBufferHeight) {
         LOG("Changing FrameBuffer geometry. Old=%dx%d New=%dx%d", FrameBufferWidth,
-            FrameBufferHeight, eye_width, height);
+            FrameBufferHeight, eye_width, eye_height);
         FrameBufferWidth = eye_width;
-        FrameBufferHeight = height;
+        FrameBufferHeight = eye_height;
         ovrRenderer_Destroy(&Renderer);
         ovrRenderer_Create(&Renderer, &java, UseMultiview, FrameBufferWidth, FrameBufferHeight,
                            SurfaceTextureID, loadingTexture, CameraTexture, m_ARMode);

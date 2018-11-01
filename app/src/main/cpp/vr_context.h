@@ -71,6 +71,7 @@ private:
     bool support72hz = false;
     int FrameBufferWidth = 0;
     int FrameBufferHeight = 0;
+    GLfloat Gamma = 1.0;
 
     uint64_t FrameIndex = 0;
     uint64_t WantedFrameIndex = 0;

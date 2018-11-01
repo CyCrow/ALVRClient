@@ -1,6 +1,8 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
+#include "asset.h"
+
 #include "render.h"
 #include "utils.h"
 #include "gltf_model.h"
@@ -336,7 +338,7 @@ void eglInit() {
     egl.Display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglInitialize(egl.Display, &major, &minor);
 
-// Do NOT use eglChooseConfig, because the Android EGL code pushes in multisample
+    // Do NOT use eglChooseConfig, because the Android EGL code pushes in multisample
     // flags in eglChooseConfig if the user has selected the "force 4x MSAA" option in
     // settings, and that is completely wasted for our warp target.
     const int MAX_CONFIGS = 1024;
@@ -552,8 +554,7 @@ bool ovrFramebuffer_Create(ovrFramebuffer *frameBuffer, const bool useMultiview,
     frameBuffer->Width = width;
     frameBuffer->Height = height;
     frameBuffer->Multisamples = multisamples;
-    frameBuffer->UseMultiview = (useMultiview && (glFramebufferTextureMultiviewOVR != NULL)) ? true
-                                                                                             : false;
+    frameBuffer->UseMultiview = useMultiview && (glFramebufferTextureMultiviewOVR != NULL);
 
     frameBuffer->ColorTextureSwapChain = vrapi_CreateTextureSwapChain(
             frameBuffer->UseMultiview ? VRAPI_TEXTURE_TYPE_2D_ARRAY : VRAPI_TEXTURE_TYPE_2D,
@@ -751,6 +752,8 @@ void ovrGeometry_Clear(ovrGeometry *geometry) {
     }
 }
 
+
+
 void ovrGeometry_CreatePanel(ovrGeometry *geometry) {
     typedef struct {
         float positions[4][4];
@@ -758,19 +761,19 @@ void ovrGeometry_CreatePanel(ovrGeometry *geometry) {
     } ovrCubeVertices;
 
     static const ovrCubeVertices cubeVertices =
-            {
-                    // positions
-                    {
-                            {-1, -1, 0, 1}, {1,   1, 0, 1}, {1,   -1, 0, 1}, {-1, 1, 0, 1}
-                    },
-                    // uv
-                    {       {0,  1},        {0.5, 0},       {0.5, 1},        {0,  0}}
-            };
+    {
+        // positions
+        {
+            {-1, -1, 0, 1}, {1,   1, 0, 1}, {1,   -1, 0, 1}, {-1, 1, 0, 1}
+        },
+        // uv
+        {   {0,  1},        {0.5, 0},       {0.5, 1},        {0,  0} }
+    };
 
     static const unsigned short cubeIndices[6] =
-            {
-                    0, 2, 1, 0, 1, 3,
-            };
+    {
+        0, 2, 1, 0, 1, 3,
+    };
 
 
     geometry->VertexCount = 4;
@@ -779,14 +782,14 @@ void ovrGeometry_CreatePanel(ovrGeometry *geometry) {
     geometry->VertexAttribs[0].Index = VERTEX_ATTRIBUTE_LOCATION_POSITION;
     geometry->VertexAttribs[0].Size = 4;
     geometry->VertexAttribs[0].Type = GL_FLOAT;
-    geometry->VertexAttribs[0].Normalized = true;
+    geometry->VertexAttribs[0].Normalized = GL_TRUE;
     geometry->VertexAttribs[0].Stride = sizeof(cubeVertices.positions[0]);
     geometry->VertexAttribs[0].Pointer = (const GLvoid *) offsetof(ovrCubeVertices, positions);
 
     geometry->VertexAttribs[1].Index = VERTEX_ATTRIBUTE_LOCATION_UV;
     geometry->VertexAttribs[1].Size = 2;
     geometry->VertexAttribs[1].Type = GL_FLOAT;
-    geometry->VertexAttribs[1].Normalized = true;
+    geometry->VertexAttribs[1].Normalized = GL_TRUE;
     geometry->VertexAttribs[1].Stride = 8;
     geometry->VertexAttribs[1].Pointer = (const GLvoid *) offsetof(ovrCubeVertices, uv);
 
@@ -804,6 +807,121 @@ void ovrGeometry_CreatePanel(ovrGeometry *geometry) {
     GL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
 }
 
+
+void ovrGeometry_CreateWarpPanel(ovrGeometry *geometry, float gamma, int sz) {
+    typedef struct {
+        float Pos[4];
+        float Tex[2];
+    } ovrWarpVertex;
+
+    float dx = (1.0f) / (sz - 1);
+    float dy = (1.0f) / (sz - 1);
+
+    int sz2 = sz * sz;
+    // create vertices
+    ovrWarpVertex *vtx = new ovrWarpVertex[sz2];
+
+    for (int y = 0; y < sz; ++y)
+    {
+        float fy = y * dy;
+        float gy = 0.5f * powf(1.0f - 2.0f * fabs(fy - 0.5f), gamma);
+        if (fy >= 0.5f)
+            gy = 1.0f - gy;
+
+        for (int x = 0; x < sz; ++x)
+        {
+            int pos = y * sz + x;
+            float fx = x * dx; // 0-1
+            float gx = 0.5f * powf(1.0f - 2.0f * fabs(fx - 0.5f), gamma);
+            if (fx >= 0.5f)
+                gx = 1.0f - gx;
+
+            // GlDirectX::XMFLOAT3(-1.0f + gx, -1.0f + 2 * gy, 0.5f);
+            vtx[pos].Pos[0] = -1.0f + fx * 2.0f;
+            vtx[pos].Pos[1] = 1.0f - fy * 2.0f;
+            vtx[pos].Pos[2] = 0.5f;
+            vtx[pos].Pos[3] = 1.0f;
+            vtx[pos].Tex[0] = gx * 0.5f;
+            vtx[pos].Tex[1] = gy;
+
+
+            // vtx[pos + sz2].Pos = DirectX::XMFLOAT3(0.0f + gx, -1.0f + 2 * gy, 0.5f);
+            // vtx[pos + sz2].Tex = DirectX::XMFLOAT2(fx, fy);
+            // vtx[pos + sz2].View = 1; // right eye
+        }
+    }
+
+    // init triangle index buffer
+    int idxSz = (sz - 1) * (sz - 1) * 6;
+    unsigned short *idx = new unsigned short[idxSz];
+
+    int idxPos = 0;
+    for (int y = 0; y < (sz - 1); ++y)
+    {
+        for (int x = 0; x < (sz - 1); ++x)
+        {
+            int pos = x * sz + y;
+
+            idx[idxPos++] = (unsigned short)pos;
+            idx[idxPos++] = (unsigned short)(pos + sz);
+            idx[idxPos++] = (unsigned short)(pos + 1);
+            idx[idxPos++] = (unsigned short)(pos + 1);
+            idx[idxPos++] = (unsigned short)(pos + sz);
+            idx[idxPos++] = (unsigned short)(pos + sz + 1);
+        }
+    }
+/*
+    static const ovrCubeVertices cubeVertices =
+            {
+                    // positions
+                    {
+                            {-1, -1, 0, 1}, {1,   1, 0, 1}, {1,   -1, 0, 1}, {-1, 1, 0, 1}
+                    },
+                    // uv
+                    {   {0,  1},        {0.5, 0},       {0.5, 1},        {0,  0} }
+            };
+
+    static const unsigned short cubeIndices[6] =
+            {
+                    0, 2, 1, 0, 1, 3,
+            };
+*/
+
+    geometry->VertexCount = sz2;
+    geometry->IndexCount = idxSz;
+
+    geometry->VertexAttribs[0].Index = VERTEX_ATTRIBUTE_LOCATION_POSITION;
+    geometry->VertexAttribs[0].Size = 4;
+    geometry->VertexAttribs[0].Type = GL_FLOAT;
+    geometry->VertexAttribs[0].Normalized = GL_TRUE;
+    geometry->VertexAttribs[0].Stride = sizeof(ovrWarpVertex);
+    geometry->VertexAttribs[0].Pointer = (const GLvoid *) offsetof(ovrWarpVertex, Pos);
+
+    geometry->VertexAttribs[1].Index = VERTEX_ATTRIBUTE_LOCATION_UV;
+    geometry->VertexAttribs[1].Size = 2;
+    geometry->VertexAttribs[1].Type = GL_FLOAT;
+    geometry->VertexAttribs[1].Normalized = GL_TRUE;
+    geometry->VertexAttribs[1].Stride = sizeof(ovrWarpVertex);
+    geometry->VertexAttribs[1].Pointer = (const GLvoid *) offsetof(ovrWarpVertex, Tex);
+
+    geometry->VertexAttribs[2].Index = (GLuint)-1;
+    geometry->VertexAttribs[3].Index = (GLuint)-1;
+
+    GL(glGenBuffers(1, &geometry->VertexBuffer));
+    GL(glBindBuffer(GL_ARRAY_BUFFER, geometry->VertexBuffer));
+    GL(glBufferData(GL_ARRAY_BUFFER, sizeof(ovrWarpVertex) * sz2, vtx, GL_STATIC_DRAW));
+    GL(glBindBuffer(GL_ARRAY_BUFFER, 0));
+
+    GL(glGenBuffers(1, &geometry->IndexBuffer));
+    GL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, geometry->IndexBuffer));
+    GL(glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(unsigned short) * idxSz, idx, GL_STATIC_DRAW));
+    GL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
+
+    delete[] vtx;
+    delete[] idx;
+}
+
+
 void ovrGeometry_CreateTestMode(ovrGeometry *geometry) {
     typedef struct {
         float positions[8][4];
@@ -812,33 +930,39 @@ void ovrGeometry_CreateTestMode(ovrGeometry *geometry) {
     } ovrCubeVertices;
 
     static const ovrCubeVertices cubeVertices =
-            {
-                    // positions
-                    {
-                            {-0.5, +0.5, -0.5, +0.5}, {+0.5, +0.5, -0.5, +0.5}, {+0.5, +0.5, +0.5, +0.5}, {-0.5, +0.5, +0.5, +0.5},    // top
-                            {-0.5, -0.5, -0.5, +0.5}, {-0.5, -0.5, +0.5, +0.5}, {+0.5, -0.5, +0.5, +0.5}, {+0.5, -0.5, -0.5, +0.5}    // bottom
-                    },
-                    // colors
-                    {
-                            {255,  0,    255,  255},  {0,    255,  0,    255},  {0,    0,    255,  255},  {255,  0,    0,    255},
-                            {0,    0,    255,  255},  {0,    255,  0,    255},  {255,  0,    255,  255},  {255,  0,    0,    255}
-                    },
-                    // uv
-                    {
-                            {0,    1},                {0.5,  0},                {0.5,  1},                {0,    0},
-                            {0,    1},                {0.5,  0},                {0.5,  1},                {0,    0},
-                    }
-            };
+    {
+        // positions
+        {
+            {-0.5f, +0.5f, -0.5f, +0.5f}, {+0.5f, +0.5f, -0.5f, +0.5f},
+            {+0.5f, +0.5f, +0.5f, +0.5f}, {-0.5f, +0.5f, +0.5f, +0.5f},    // top
+            {-0.5f, -0.5f, -0.5f, +0.5f}, {-0.5f, -0.5f, +0.5f, +0.5f},
+            {+0.5f, -0.5f, +0.5f, +0.5f}, {+0.5f, -0.5f, -0.5f, +0.5f}    // bottom
+        },
+        // colors
+        {
+            {255,  0,    255,  255},  {0,    255,  0,    255},
+            {0,    0,    255,  255},  {255,  0,    0,    255},
+            {0,    0,    255,  255},  {0,    255,  0,    255},
+            {255,  0,    255,  255},  {255,  0,    0,    255}
+        },
+        // uv
+        {
+            {0,    1},                {0.5,  0},
+            {0.5,  1},                {0,    0},
+            {0,    1},                {0.5,  0},
+            {0.5,  1},                {0,    0},
+        }
+    };
 
     static const unsigned short cubeIndices[36] =
-            {
-                    0, 2, 1, 2, 0, 3,    // top
-                    4, 6, 5, 6, 4, 7,    // bottom
-                    2, 6, 7, 7, 1, 2,    // right
-                    0, 4, 5, 5, 3, 0,    // left
-                    3, 5, 6, 6, 2, 3,    // front
-                    0, 1, 7, 7, 4, 0    // back
-            };
+    {
+        0, 2, 1, 2, 0, 3,    // top
+        4, 6, 5, 6, 4, 7,    // bottom
+        2, 6, 7, 7, 1, 2,    // right
+        0, 4, 5, 5, 3, 0,    // left
+        3, 5, 6, 6, 2, 3,    // front
+        0, 1, 7, 7, 4, 0    // back
+    };
 
     geometry->VertexCount = 8;
     geometry->IndexCount = 36;
@@ -846,21 +970,21 @@ void ovrGeometry_CreateTestMode(ovrGeometry *geometry) {
     geometry->VertexAttribs[0].Index = VERTEX_ATTRIBUTE_LOCATION_POSITION;
     geometry->VertexAttribs[0].Size = 4;
     geometry->VertexAttribs[0].Type = GL_FLOAT;
-    geometry->VertexAttribs[0].Normalized = true;
+    geometry->VertexAttribs[0].Normalized = GL_TRUE;
     geometry->VertexAttribs[0].Stride = sizeof(cubeVertices.positions[0]);
     geometry->VertexAttribs[0].Pointer = (const GLvoid *) offsetof(ovrCubeVertices, positions);
 
     geometry->VertexAttribs[1].Index = VERTEX_ATTRIBUTE_LOCATION_COLOR;
     geometry->VertexAttribs[1].Size = 4;
     geometry->VertexAttribs[1].Type = GL_UNSIGNED_BYTE;
-    geometry->VertexAttribs[1].Normalized = true;
+    geometry->VertexAttribs[1].Normalized = GL_TRUE;
     geometry->VertexAttribs[1].Stride = sizeof(cubeVertices.colors[0]);
     geometry->VertexAttribs[1].Pointer = (const GLvoid *) offsetof(ovrCubeVertices, colors);
 
     geometry->VertexAttribs[2].Index = VERTEX_ATTRIBUTE_LOCATION_UV;
     geometry->VertexAttribs[2].Size = 2;
     geometry->VertexAttribs[2].Type = GL_FLOAT;
-    geometry->VertexAttribs[2].Normalized = true;
+    geometry->VertexAttribs[2].Normalized = GL_TRUE;
     geometry->VertexAttribs[2].Stride = 8;
     geometry->VertexAttribs[2].Pointer = (const GLvoid *) offsetof(ovrCubeVertices, uv);
 
@@ -938,17 +1062,42 @@ typedef struct {
 } ovrUniform;
 
 static ovrUniform ProgramUniforms[] =
-        {
-                {UNIFORM_VIEW_ID,          UNIFORM_TYPE_INT,       "ViewID"},
-                {UNIFORM_MVP_MATRIX,       UNIFORM_TYPE_MATRIX4X4, "mvpMatrix"},
-                {UNIFORM_ENABLE_TEST_MODE, UNIFORM_TYPE_INT,       "EnableTestMode"},
-                {UNIFORM_ALPHA, UNIFORM_TYPE_FLOAT,       "alpha"},
-                {UNIFORM_COLOR, UNIFORM_TYPE_VECTOR4,       "Color"},
-                {UNIFORM_M_MATRIX, UNIFORM_TYPE_MATRIX4X4,       "mMatrix"},
-                {UNIFORM_MODE, UNIFORM_TYPE_INT,       "Mode"},
-        };
+{
+    {UNIFORM_VIEW_ID,          UNIFORM_TYPE_INT,       "ViewID"},
+    {UNIFORM_MVP_MATRIX,       UNIFORM_TYPE_MATRIX4X4, "mvpMatrix"},
+    {UNIFORM_ENABLE_TEST_MODE, UNIFORM_TYPE_INT,       "EnableTestMode"},
+    {UNIFORM_ALPHA, UNIFORM_TYPE_FLOAT,       "alpha"},
+    {UNIFORM_COLOR, UNIFORM_TYPE_VECTOR4,       "Color"},
+    {UNIFORM_M_MATRIX, UNIFORM_TYPE_MATRIX4X4,       "mMatrix"},
+    {UNIFORM_MODE, UNIFORM_TYPE_INT,       "Mode"},
+};
 
 static const char *programVersion = "#version 300 es\n";
+
+static std::map<const char *, const char *> shaders;
+
+
+static const char *ReadShaderAsset(const char *name)
+{
+    if (shaders.count(name) > 0)
+        return shaders[name];
+
+    std::vector<unsigned char> buffer;
+
+    char assetName[1000];
+    snprintf(assetName,1000,"shader/%s.glsl", name);
+
+    if (!loadAsset(assetName, buffer)) {
+        LOGE("Error on loading shader '%s'", name);
+        return NULL;
+    }
+    LOGI("loaded shader '%s', %d bytes", name, (int)buffer.size());
+    char *shader = new char[buffer.size()];
+    memcpy(shader, buffer.data(), buffer.size());
+    shaders[name] = shader;
+    return shader;
+}
+
 
 bool
 ovrProgram_Create(ovrProgram *program, const char *vertexSource, const char *fragmentSource,
@@ -1110,14 +1259,18 @@ void ovrRenderer_CreateScene(ovrRenderer *renderer) {
     if(renderer->SceneCreated) {
         return;
     }
-    const char *fragment_shader = FRAGMENT_SHADER;
+    const char *fragment_shader = FRAGMENT_SHADER; // ReadShaderAsset("fragment_shader");
     if(renderer->ARMode) {
         fragment_shader = FRAGMENT_SHADER_AR;
     }
-    ovrProgram_Create(&renderer->Program, VERTEX_SHADER, fragment_shader, renderer->UseMultiview);
+
+    const char *vertex_shader = VERTEX_SHADER; //  ReadShaderAsset("vertex_shader");
+
+    ovrProgram_Create(&renderer->Program, vertex_shader, fragment_shader, renderer->UseMultiview);
     ovrProgram_Create(&renderer->ProgramLoading, VERTEX_SHADER_LOADING, FRAGMENT_SHADER_LOADING,
                       renderer->UseMultiview);
-    ovrGeometry_CreatePanel(&renderer->Panel);
+    ovrGeometry_CreateWarpPanel(&renderer->Panel, 1.8f, 64);
+    // ovrGeometry_CreatePanel(&renderer->Panel);
     ovrGeometry_CreateVAO(&renderer->Panel);
     ovrGeometry_CreateTestMode(&renderer->TestMode);
     ovrGeometry_CreateVAO(&renderer->TestMode);
@@ -1290,7 +1443,7 @@ ovrLayerProjection2 ovrRenderer_RenderFrame(ovrRenderer *renderer, const ovrJava
 
             GL(glBindVertexArray(renderer->Panel.VertexArrayObject));
 
-            GL(glUniformMatrix4fv(renderer->Program.UniformLocation[UNIFORM_MVP_MATRIX], 2, true,
+            GL(glUniformMatrix4fv(renderer->Program.UniformLocation[UNIFORM_MVP_MATRIX], 2, GL_TRUE,
                                   (float *) mvpMatrix));
 
             if(AROverlayMode == 0) {
@@ -1331,7 +1484,7 @@ ovrLayerProjection2 ovrRenderer_RenderFrame(ovrRenderer *renderer, const ovrJava
         GL(glUseProgram(0));
 
         // Explicitly clear the border texels to black when GL_CLAMP_TO_BORDER is not available.
-        if (glExtensions.EXT_texture_border_clamp == false) {
+        if (!glExtensions.EXT_texture_border_clamp) {
             // Clear to fully opaque black.
             GL(glClearColor(0.0f, 0.0f, 0.0f, 1.0f));
             // bottom
